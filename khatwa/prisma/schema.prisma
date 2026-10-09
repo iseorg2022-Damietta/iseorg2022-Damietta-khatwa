@@ -1,0 +1,226 @@
+generator client { provider = "prisma-client-js" }
+datasource db { provider = "postgresql"; url = env("DATABASE_URL") }
+
+enum Role { MOTHER SPECIALIST DIAGNOSTICIAN COORDINATOR ADMIN }
+enum Answer { ACHIEVED NOT_YET LOST REFUSED }
+enum ReferralStatus { CREATED CONTACTED SCHEDULED ASSESSED CLOSED }
+enum Urgency { TELECONSULT SCHEDULED_7D IMMEDIATE_48H }
+enum Hearing { PASS REFER UNKNOWN }
+
+model User {
+  id        Int      @id @default(autoincrement())
+  phone     String   @unique   // E.164: 201112773477
+  name      String?
+  role      Role     @default(MOTHER)
+  createdAt DateTime @default(now())
+  children    Child[]
+  pregnancies Pregnancy[]
+  reviews     Assessment[]
+  @@index([role])
+}
+
+model Pregnancy {
+  id      Int      @id @default(autoincrement())
+  userId  Int
+  user    User     @relation(fields: [userId], references: [id])
+  lmpDate DateTime?
+  eddDate DateTime?
+  status  String   @default("active")
+  createdAt DateTime @default(now())
+  events   PregnancyEvent[]
+  children Child[]
+  @@index([userId, status])
+}
+
+model PregnancyEvent {
+  id          Int       @id @default(autoincrement())
+  pregnancyId Int
+  pregnancy   Pregnancy @relation(fields: [pregnancyId], references: [id])
+  category    String
+  code        String
+  label       String
+  weight      Int
+  week        Int?
+  notes       String?
+  createdAt   DateTime  @default(now())
+  @@index([pregnancyId])
+}
+
+model Child {
+  id              Int      @id @default(autoincrement())
+  userId          Int
+  user            User     @relation(fields: [userId], references: [id])
+  pregnancyId     Int?
+  pregnancy       Pregnancy? @relation(fields: [pregnancyId], references: [id])
+  name            String
+  gender          String?
+  birthDate       DateTime
+  gaWeeks         Float    @default(40)
+  birthWeightG    Int?
+  apgar5          Int?
+  deliveryType    String?
+  district        String?            // للتغطية الجغرافية
+  nicuDays        Int      @default(0)
+  jaundicePhoto   Boolean  @default(false)
+  jaundiceExch    Boolean  @default(false)
+  neonatalSeiz    Boolean  @default(false)
+  hearingScreen   Hearing  @default(UNKNOWN)
+  ivhGrade        Int?
+  hie             Boolean  @default(false)
+  ventilationDays Int      @default(0)
+  ototoxic        Boolean  @default(false)
+  familyHistory   String?
+  consanguinity   Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  riskFactors ChildRiskFactor[]
+  responses   MilestoneResponse[]
+  assessments Assessment[]
+  referrals   Referral[]
+  alerts      Alert[]
+  @@index([userId])
+}
+
+model ChildRiskFactor {
+  id        Int      @id @default(autoincrement())
+  childId   Int
+  child     Child    @relation(fields: [childId], references: [id], onDelete: Cascade)
+  code      String
+  label     String
+  weight    Int
+  category  String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  @@index([childId, active])
+}
+
+model MilestoneItem {
+  id       String  @id
+  kind     String  @default("milestone") // milestone | regression
+  domain   String  // GM|FM|CO|SE|CP|SC
+  wmin     Float
+  wmax     Float
+  weight   Int
+  gate     Boolean @default(false)
+  limitAge Float?
+  sev      String?
+  stem     String
+  guide    String?
+  active   Boolean @default(true)
+  @@index([active, wmin, wmax])
+}
+
+model MilestoneResponse {
+  id          Int      @id @default(autoincrement())
+  childId     Int
+  child       Child    @relation(fields: [childId], references: [id], onDelete: Cascade)
+  itemId      String   // بلا FK عمداً — الكتالوج مستقل والردود التاريخية محمية
+  checkpoint  Int
+  answer      Answer
+  answeredBy  String   @default("mother")
+  createdAt   DateTime @default(now())
+  @@unique([childId, itemId, checkpoint])
+  @@index([childId])
+}
+
+model Assessment {
+  id            Int      @id @default(autoincrement())
+  childId       Int
+  child         Child    @relation(fields: [childId], references: [id], onDelete: Cascade)
+  checkpoint    Int
+  chronoAge     Float
+  devAge        Float
+  index         Int
+  level         Int
+  delayScore    Float
+  redFlagScore  Float
+  rfScore       Float
+  domainScores  Json
+  redFlags      Json
+  overrides     Json?
+  narrative     String
+  reviewedBy    Int?
+  reviewer      User?    @relation(fields: [reviewedBy], references: [id], onDelete: SetNull)
+  reviewedAt    DateTime?          // T1 زمن المراجعة
+  adjustedLevel Int?
+  reviewNote    String?
+  createdAt     DateTime @default(now())
+  referrals Referral[]
+  alerts    Alert[]
+  @@unique([childId, checkpoint])   // حصن ضد الازدواج (تزامن Offline آمن)
+  @@index([level, createdAt])
+}
+
+model Facility {
+  id       Int     @id @default(autoincrement())
+  name     String
+  type     String
+  district String
+  services String?
+  contact  String?
+  mou      Boolean @default(false)
+  referrals Referral[]
+  @@index([district])
+}
+
+model Referral {
+  id           Int            @id @default(autoincrement())
+  childId      Int
+  child        Child          @relation(fields: [childId], references: [id], onDelete: Cascade)
+  assessmentId Int
+  assessment   Assessment     @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  facilityId   Int
+  facility     Facility       @relation(fields: [facilityId], references: [id])
+  urgency      Urgency
+  status       ReferralStatus @default(CREATED)
+  outcome      String?
+  notes        String?
+  dueAt        DateTime
+  contactedAt  DateTime?      // SLA الاتصال
+  assessedAt   DateTime?      // نهاية المسار الوجاهي
+  closedAt     DateTime?
+  createdAt    DateTime       @default(now())
+  alerts Alert[]
+  @@index([status, dueAt])
+  @@index([childId])
+}
+
+model ContentActivity {
+  id        String  @id
+  domain    String
+  amin      Float
+  amax      Float
+  title     String
+  steps     Json
+  materials String
+  why       String
+  warn      String?
+  active    Boolean @default(true)
+  @@index([domain, amin, amax])
+}
+
+model Alert {
+  id           Int       @id @default(autoincrement())
+  dedupeKey    String    @unique  // kind:channel:childId:sourceId:recipient
+  channel      String    // SMS | WHATSAPP
+  kind         String
+  recipient    String
+  body         String
+  vars         Json?              // قيم قوالب WhatsApp
+  status       String    @default("QUEUED")
+  attempts     Int       @default(0)
+  provider     String?
+  providerRef  String?
+  lastError    String?
+  nextAttempt  DateTime?
+  childId      Int?
+  child        Child?    @relation(fields: [childId], references: [id], onDelete: SetNull)
+  assessmentId Int?
+  assessment   Assessment? @relation(fields: [assessmentId], references: [id], onDelete: SetNull)
+  referralId   Int?
+  referral     Referral? @relation(fields: [referralId], references: [id], onDelete: SetNull)
+  sentAt       DateTime?
+  createdAt    DateTime  @default(now())
+  @@index([status, nextAttempt])
+  @@index([childId])
+}
